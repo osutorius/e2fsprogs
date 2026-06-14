@@ -167,3 +167,68 @@ jobs:
         with:
           name: android-${{matrix.arch}}-config.h
           path: lib/config.h
+
+  static-analysis-cppcheck:
+    name: Static analysis (cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+      - run: ./configure CC=gcc CFLAGS="$DEF_CFLAGS"
+      - name: Run cppcheck on patched sources
+        run: |
+          cppcheck --enable=warning,performance,portability \
+            --inline-suppr --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            -I lib -I lib/ext2fs -I lib/et -I lib/support \
+            -I . \
+            misc/badblocks.c lib/ext2fs/getsectsize.c
+
+  static-analysis-scan-build:
+    name: Static analysis (scan-build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tools
+      - name: Analyze patched sources with scan-build
+        run: |
+          scan-build -o scan-build-report --status-bugs \
+            sh -eu -c './configure CC=clang CFLAGS="$DEF_CFLAGS" && \
+              make -j8 -C misc badblocks V=1 && \
+              make -j8 -C lib/ext2fs getsectsize.o V=1'
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-build-report
+          path: scan-build-report
+
+  static-analysis-clang-tidy:
+    name: Static analysis (clang-tidy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy bear
+      - run: ./configure CC=clang CFLAGS="$DEF_CFLAGS"
+      - name: Analyze badblocks with clang-tidy
+        run: |
+          bear -- make -j8 -C misc badblocks V=1
+          run-clang-tidy -p misc \
+            -checks='-*,bugprone-*,clang-analyzer-*,performance-*' \
+            -header-filter='misc/badblocks.c' \
+            misc/badblocks.c
+      - name: Analyze getsectsize with clang-tidy
+        run: |
+          bear -- make -j8 -C lib/ext2fs getsectsize.o V=1
+          run-clang-tidy -p lib/ext2fs \
+            -checks='-*,bugprone-*,clang-analyzer-*,performance-*' \
+            -header-filter='lib/ext2fs/getsectsize.c' \
+            lib/ext2fs/getsectsize.c
